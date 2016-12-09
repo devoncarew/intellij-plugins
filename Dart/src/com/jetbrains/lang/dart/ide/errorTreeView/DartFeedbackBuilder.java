@@ -15,7 +15,6 @@ import org.jetbrains.annotations.Nullable;
  * send issues to the flutter project on github.
  */
 public abstract class DartFeedbackBuilder {
-  public static final int MAX_URL_LENGTH = 4000;
   // TODO(messick): Change ShowPrompt to a Dart preference
   private static boolean ShowPrompt = true;
 
@@ -57,7 +56,7 @@ public abstract class DartFeedbackBuilder {
    * Perform the action required to send feedback.
    *
    * @param project the current project
-   * @param errorMessage additional information for the issue, such as a tack trace
+   * @param errorMessage additional information for the issue, such as a stack trace
    */
   public abstract void sendFeedback(@Nullable Project project, @Nullable String errorMessage);
 

@@ -9,7 +9,12 @@ import com.google.dart.server.internal.remote.RemoteAnalysisServerImpl;
 import com.google.dart.server.internal.remote.StdioServerSocket;
 import com.google.dart.server.utilities.logging.Logging;
 import com.intellij.codeInsight.intention.IntentionManager;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.notification.Notifications;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.application.ApplicationInfo;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ApplicationNamesInfo;
@@ -68,6 +73,7 @@ import com.jetbrains.lang.dart.util.PubspecYamlUtil;
 import gnu.trove.THashMap;
 import gnu.trove.THashSet;
 import gnu.trove.TObjectIntHashMap;
+import icons.DartIcons;
 import org.dartlang.analysis.server.protocol.*;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
@@ -252,12 +258,13 @@ public class DartAnalysisServerService {
         return;
       }
 
-      String errorMessage =
-        "Dart analysis server, SDK version " + mySdkVersion +
-        ", server version " + myServerVersion +
-        ", " + (isFatal ? "FATAL " : "") + "error: " + message + "\n" + stackTrace;
+      String errorMessage = message + (isFatal ? " (fatal)" : "") + "\n" +
+                            mySdkVersion + "\n\n" +
+                            stackTrace + "\n";
       myErrorReporter.report(errorMessage); // TODO(messick): Collect server request/response traffic and add to error message.
 
+      // TODO(devoncarew): Should we be killing the analysis server here? As per the protocol spec,
+      // it will kill itself when it decides an error is severe enough.
       if (isFatal) {
         stopServer();
       }
@@ -1680,35 +1687,49 @@ public class DartAnalysisServerService {
     private int myDisruptionCount = 0;
 
     public void report(@NotNull String errorMessage) {
+      LOG.warn(errorMessage);
+
       if (myDisruptionCount > MAX_DISRUPTIONS_PER_SESSION) return;
+
       long timeStamp = System.currentTimeMillis();
       if (timeStamp - myPreviousTime < MIN_DISRUPTION_TIME) {
         if (messageDiffers(errorMessage)) {
-          LOG.error(errorMessage);
           if (myDisruptionCount > 0) {
             myDisruptionCount++; // The red flashing icon is somewhat disruptive, but we only count if the user has already been queried.
           }
         }
         return;
       }
+
       myPreviousTime = timeStamp;
+
       if (messageDiffers(errorMessage)) {
         myErrorReporter.add(() -> {
           DartFeedbackBuilder builder = DartFeedbackBuilder.getFeedbackBuilder();
-          final boolean[] reportIt = new boolean[1];
           myDisruptionCount++;
-          ApplicationManager.getApplication().invokeAndWait(() -> {
-            reportIt[0] = builder.showQuery(DartBundle.message("dart.analysis.server.error"));
-            myPreviousTime = System.currentTimeMillis();
+
+          final String GROUP_DISPLAY_ID = "Dart Analysis";
+
+          Notification notification = new Notification(
+            GROUP_DISPLAY_ID,
+            DartIcons.Dart_16,
+            DartBundle.message("dart.analysis.server.error.short"),
+            null,
+            errorMessage,
+            NotificationType.ERROR,
+            null
+          );
+          notification.addAction(new AnAction("Report this issue") {
+            @Override
+            public void actionPerformed(AnActionEvent e) {
+              notification.expire();
+              builder.sendFeedback(null, errorMessage);
+            }
           });
-          if (reportIt[0]) {
-            builder.sendFeedback(null, errorMessage);
-          }
-          else {
-            LOG.error(errorMessage);
-          }
+          Notifications.Bus.notify(notification);
         });
       }
+
       myPreviousMessage = errorMessage;
     }
 

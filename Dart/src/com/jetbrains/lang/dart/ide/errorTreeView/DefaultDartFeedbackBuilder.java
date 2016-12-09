@@ -23,29 +23,26 @@ public class DefaultDartFeedbackBuilder extends DartFeedbackBuilder {
     final ApplicationInfoEx appInfo = ApplicationInfoEx.getInstanceEx();
     boolean eap = appInfo.isEAP();
     String ijBuild = eap ? appInfo.getBuild().asStringWithoutProductCode() : appInfo.getBuild().asString();
-    String sdkVsn = getSdkVersion(project);
-    String platDescr = getDescription().replaceAll(";", " ").trim();
-    String template = DartBundle.message("dart.feedback.url.template", ijBuild, sdkVsn, platDescr);
+    String sdkVersion = getSdkVersion(project);
+    String platformDescription = getDescription().replaceAll(";", " ").trim();
+
     if (errorMessage != null) {
-      errorMessage = "```\n" + errorMessage + "```";
-      String potentialTemplate = template + "\n\n" + errorMessage;
-      if (potentialTemplate.length() <= MAX_URL_LENGTH) {
-        template = potentialTemplate;
+      String template = DartBundle.message("dart.feedback.error.template",
+                                           ijBuild, sdkVersion, platformDescription, errorMessage.trim());
+      try {
+        File file = FileUtil.createTempFile("report", ".md");
+        FileUtil.writeToFile(file, template);
+        String url = DartBundle.message("dart.feedback.error.url", file.getAbsolutePath());
+        openBrowserOnFeedbackForm(url, project);
       }
-      else {
-        try {
-          File file = FileUtil.createTempFile("report", ".txt");
-          FileUtil.writeToFile(file, errorMessage);
-          potentialTemplate =
-            template + "\n\n" + DartBundle.message("dart.error.file.instructions", file.getAbsolutePath()) + "\n\n" + errorMessage;
-          template = potentialTemplate.substring(0, MAX_URL_LENGTH);
-        }
-        catch (IOException e) {
-          // ignore it
-        }
+      catch (IOException e) {
+        // ignore it
       }
     }
-    openBrowserOnFeedbackForm(template, project);
+    else {
+      String url = DartBundle.message("dart.feedback.url", ijBuild, sdkVersion);
+      openBrowserOnFeedbackForm(url, project);
+    }
   }
 
   public static void openBrowserOnFeedbackForm(String urlTemplate, Project project) {
