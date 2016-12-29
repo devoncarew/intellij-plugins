@@ -27,6 +27,10 @@ public class DartVmServiceEvaluator extends XDebuggerEvaluator {
   @NotNull private final String myIsolateId;
   @NotNull private final Frame myFrame;
 
+  public DartVmServiceEvaluator(DartVmServiceStackFrame frame) {
+    this(frame.getDebugProcess(), frame.getIsolateId(), frame.getVmFrame());
+  }
+
   public DartVmServiceEvaluator(@NotNull final DartVmServiceDebugProcess debugProcess,
                                 @NotNull final String isolateId,
                                 @NotNull final Frame vmFrame) {

@@ -1,21 +1,52 @@
 package com.jetbrains.lang.dart.ide.runner.server.vmService.frame;
 
+import com.intellij.debugger.SourcePosition;
+import com.intellij.debugger.engine.JavaStackFrame;
+import com.intellij.debugger.engine.evaluation.CodeFragmentKind;
+import com.intellij.debugger.engine.evaluation.TextWithImports;
+import com.intellij.debugger.ui.impl.watch.NodeDescriptorImpl;
+import com.intellij.debugger.ui.impl.watch.NodeDescriptorProvider;
+import com.intellij.debugger.ui.impl.watch.NodeManagerImpl;
+import com.intellij.debugger.ui.impl.watch.WatchItemDescriptor;
 import com.intellij.icons.AllIcons;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
+import com.intellij.openapi.fileTypes.FileType;
+import com.intellij.openapi.util.Computable;
+import com.intellij.openapi.util.Pair;
+import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.PsiCompiledElement;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.LightVirtualFile;
 import com.intellij.ui.ColoredTextContainer;
 import com.intellij.ui.SimpleTextAttributes;
 import com.intellij.util.SmartList;
+import com.intellij.util.containers.ContainerUtil;
+import com.intellij.util.text.CharArrayUtil;
 import com.intellij.xdebugger.XSourcePosition;
 import com.intellij.xdebugger.evaluation.XDebuggerEvaluator;
-import com.intellij.xdebugger.frame.XCompositeNode;
-import com.intellij.xdebugger.frame.XStackFrame;
-import com.intellij.xdebugger.frame.XValueChildrenList;
+import com.intellij.xdebugger.evaluation.XInstanceEvaluator;
+import com.intellij.xdebugger.frame.*;
+import com.intellij.xdebugger.frame.presentation.XErrorValuePresentation;
+import com.intellij.xdebugger.frame.presentation.XValuePresentation;
+import com.intellij.xdebugger.settings.XDebuggerSettingsManager;
+import com.jetbrains.lang.dart.DartFileType;
+import com.jetbrains.lang.dart.DartLanguage;
 import com.jetbrains.lang.dart.ide.runner.server.vmService.DartVmServiceDebugProcess;
 import org.dartlang.vm.service.consumer.GetObjectConsumer;
 import org.dartlang.vm.service.element.*;
+import org.jetbrains.annotations.NonNls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+
+import javax.swing.*;
+import java.util.Collections;
+import java.util.Set;
 
 public class DartVmServiceStackFrame extends XStackFrame {
 
@@ -45,6 +76,16 @@ public class DartVmServiceStackFrame extends XStackFrame {
   @Override
   public XSourcePosition getSourcePosition() {
     return mySourcePosition;
+  }
+
+  @NotNull
+  public DartVmServiceDebugProcess getDebugProcess() {
+    return myDebugProcess;
+  }
+
+  @NotNull
+  public Frame getVmFrame() {
+    return myVmFrame;
   }
 
   @Override
@@ -91,7 +132,10 @@ public class DartVmServiceStackFrame extends XStackFrame {
                                                       @Nullable final BoundVariable thisVar,
                                                       @NotNull final ElementList<BoundVariable> vars) {
     if (thisVar == null) {
-      addVars(node, vars);
+      final XValueChildrenList children = new XValueChildrenList(vars.size());
+      addVars(children, vars);
+      addAutoExpressions(children);
+      node.addChildren(children, true);
       return;
     }
 
@@ -105,13 +149,13 @@ public class DartVmServiceStackFrame extends XStackFrame {
           }
         }
 
+        final XValueChildrenList children = new XValueChildrenList(vars.size());
         if (!staticFields.isEmpty()) {
-          final XValueChildrenList list = new XValueChildrenList();
-          list.addTopGroup(new DartStaticFieldsGroup(myDebugProcess, myIsolateId, ((ClassObj)classObj).getName(), staticFields));
-          node.addChildren(list, false);
+          children.addTopGroup(new DartStaticFieldsGroup(myDebugProcess, myIsolateId, ((ClassObj)classObj).getName(), staticFields));
         }
-
-        addVars(node, vars);
+        addVars(children, vars);
+        addAutoExpressions(children);
+        node.addChildren(children, true);
       }
 
       @Override
@@ -126,9 +170,7 @@ public class DartVmServiceStackFrame extends XStackFrame {
     });
   }
 
-  private void addVars(@NotNull final XCompositeNode node, @NotNull final ElementList<BoundVariable> vars) {
-    final XValueChildrenList childrenList = new XValueChildrenList(vars.size());
-
+  private void addVars(@NotNull final XValueChildrenList children, @NotNull final ElementList<BoundVariable> vars) {
     for (BoundVariable var : vars) {
       final InstanceRef value = var.getValue();
       if (value != null) {
@@ -136,11 +178,157 @@ public class DartVmServiceStackFrame extends XStackFrame {
           "this".equals(var.getName())
           ? null
           : new DartVmServiceValue.LocalVarSourceLocation(myVmFrame.getLocation().getScript(), var.getDeclarationTokenPos());
-        childrenList.add(new DartVmServiceValue(myDebugProcess, myIsolateId, var.getName(), value, varLocation, null, false));
+        children.add(new DartVmServiceValue(myDebugProcess, myIsolateId, var.getName(), value, varLocation, null, false));
       }
     }
+  }
 
-    node.addChildren(childrenList, true);
+  private static final Pair<Set<String>, Set<TextWithImports>> EMPTY_USED_VARS =
+    Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
+
+  private void addAutoExpressions(@NotNull final XValueChildrenList children) {
+    if (!XDebuggerSettingsManager.getInstance().getDataViewSettings().isAutoExpressions()) {
+      return;
+    }
+
+    // TODO: look for referenced globals from the start of the method until the current source location
+
+    // TODO: look for referenced instance fields from the start of the method until the current source location
+
+    // TODO: look for referenced statics from the start of the method until the current source location
+
+    Pair<Set<String>, Set<TextWithImports>> usedVars = EMPTY_USED_VARS;
+    if (mySourcePosition != null) {
+      usedVars = ApplicationManager.getApplication().runReadAction(new Computable<Pair<Set<String>, Set<TextWithImports>>>() {
+        @Override
+        public Pair<Set<String>, Set<TextWithImports>> compute() {
+          return findReferencedVars(ContainerUtil.union(visibleVariables.keySet(), visibleLocals), mySourcePosition);
+        }
+      });
+    }
+
+    DartTextWithImports text = new DartTextWithImports("foobar");
+
+    NodeManagerImpl nodeManager = myDebugProcess.getNodeManager();
+    WatchItemDescriptor descriptor = nodeManager.getWatchItemDescriptor(null, text, null);
+    DartVmServiceEvaluator evaluator = new DartVmServiceEvaluator(this);
+
+    children.add(new DartNamedValue(descriptor, evaluator, nodeManager));
+  }
+
+  @SuppressWarnings("Duplicates")
+  private static Pair<Set<String>, Set<TextWithImports>> findReferencedVars(Set<String> visibleVars, @NotNull SourcePosition position) {
+    final int line = position.getLine();
+    if (line < 0) {
+      return Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
+    }
+    final PsiFile positionFile = position.getFile();
+    if (!positionFile.isValid() || !positionFile.getLanguage().isKindOf(DartLanguage.INSTANCE)) {
+      return Pair.create(visibleVars, Collections.emptySet());
+    }
+
+    final VirtualFile vFile = positionFile.getVirtualFile();
+    final Document doc = vFile != null ? FileDocumentManager.getInstance().getDocument(vFile) : null;
+    if (doc == null || doc.getLineCount() == 0 || line > (doc.getLineCount() - 1)) {
+      return Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
+    }
+
+    final TextRange limit = calculateLimitRange(positionFile, doc, line);
+
+    int startLine = Math.max(limit.getStartOffset(), line - 1);
+    startLine = Math.min(startLine, limit.getEndOffset());
+    while (startLine > limit.getStartOffset() && shouldSkipLine(positionFile, doc, startLine)) {
+      startLine--;
+    }
+    final int startOffset = doc.getLineStartOffset(startLine);
+
+    int endLine = Math.min(line + 2, limit.getEndOffset());
+    while (endLine < limit.getEndOffset() && shouldSkipLine(positionFile, doc, endLine)) {
+      endLine++;
+    }
+    final int endOffset = doc.getLineEndOffset(endLine);
+
+    final TextRange lineRange = new TextRange(startOffset, endOffset);
+    if (!lineRange.isEmpty()) {
+      final int offset = CharArrayUtil.shiftForward(doc.getCharsSequence(), doc.getLineStartOffset(line), " \t");
+      PsiElement element = positionFile.findElementAt(offset);
+      if (element != null) {
+        PsiMethod method = PsiTreeUtil.getNonStrictParentOfType(element, PsiMethod.class);
+        if (method != null) {
+          element = method;
+        }
+        else {
+          PsiField field = PsiTreeUtil.getNonStrictParentOfType(element, PsiField.class);
+          if (field != null) {
+            element = field;
+          }
+          else {
+            final PsiClassInitializer initializer = PsiTreeUtil.getNonStrictParentOfType(element, PsiClassInitializer.class);
+            if (initializer != null) {
+              element = initializer;
+            }
+          }
+        }
+
+        //noinspection unchecked
+        if (element instanceof PsiCompiledElement) {
+          return Pair.create(visibleVars, Collections.emptySet());
+        }
+        else {
+          JavaStackFrame.VariablesCollector collector = new JavaStackFrame.VariablesCollector(visibleVars, adjustRange(element, lineRange));
+          element.accept(collector);
+          return Pair.create(collector.getVars(), collector.getExpressions());
+        }
+      }
+    }
+    return Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
+  }
+
+  @SuppressWarnings("Duplicates")
+  private static TextRange calculateLimitRange(final PsiFile file, final Document doc, final int line) {
+    final int offset = doc.getLineStartOffset(line);
+    if (offset > 0) {
+      PsiMethod method = PsiTreeUtil.getParentOfType(file.findElementAt(offset), PsiMethod.class, false);
+      if (method != null) {
+        final TextRange elemRange = method.getTextRange();
+        return new TextRange(doc.getLineNumber(elemRange.getStartOffset()), doc.getLineNumber(elemRange.getEndOffset()));
+      }
+    }
+    return new TextRange(0, doc.getLineCount() - 1);
+  }
+
+  @SuppressWarnings("Duplicates")
+  private static boolean shouldSkipLine(final PsiFile file, Document doc, int line) {
+    final int start = doc.getLineStartOffset(line);
+    final int end = doc.getLineEndOffset(line);
+    final int _start = CharArrayUtil.shiftForward(doc.getCharsSequence(), start, " \n\t");
+    if (_start >= end) {
+      return true;
+    }
+
+    TextRange alreadyChecked = null;
+    for (PsiElement elem = file.findElementAt(_start); elem != null && elem.getTextOffset() <= end && (alreadyChecked == null || !alreadyChecked .contains(elem.getTextRange())); elem = elem.getNextSibling()) {
+      for (PsiElement _elem = elem; _elem.getTextOffset() >= _start; _elem = _elem.getParent()) {
+        alreadyChecked = _elem.getTextRange();
+
+        if (_elem instanceof PsiDeclarationStatement) {
+          final PsiElement[] declared = ((PsiDeclarationStatement)_elem).getDeclaredElements();
+          for (PsiElement declaredElement : declared) {
+            if (declaredElement instanceof PsiVariable) {
+              return false;
+            }
+          }
+        }
+
+        if (_elem instanceof PsiJavaCodeReferenceElement) {
+          final PsiElement resolved = ((PsiJavaCodeReferenceElement)_elem).resolve();
+          if (resolved instanceof PsiVariable) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   @Nullable
@@ -151,5 +339,133 @@ public class DartVmServiceStackFrame extends XStackFrame {
 
   public boolean isInDartSdkPatchFile() {
     return mySourcePosition != null && (mySourcePosition.getFile() instanceof LightVirtualFile);
+  }
+}
+
+class DartTextWithImports implements TextWithImports {
+  private String myText;
+
+  DartTextWithImports(String text) {
+    myText = text;
+  }
+
+  @Override
+  public String getText() {
+    return myText;
+  }
+
+  @Override
+  public void setText(String newText) {
+    myText = newText;
+  }
+
+  @NotNull
+  @Override
+  public String getImports() {
+    return "";
+  }
+
+  @Override
+  public CodeFragmentKind getKind() {
+    return CodeFragmentKind.EXPRESSION;
+  }
+
+  @Override
+  public boolean isEmpty() {
+    return myText.isEmpty();
+  }
+
+  @Override
+  public String toExternalForm() {
+    return getText();
+  }
+
+  @Nullable
+  @Override
+  public FileType getFileType() {
+    return DartFileType.INSTANCE;
+  }
+}
+
+class DartNamedValue extends XNamedValue implements NodeDescriptorProvider {
+  private final WatchItemDescriptor myDescriptor;
+  private final DartVmServiceEvaluator myEvaluator;
+  private final NodeManagerImpl myManager;
+
+  public DartNamedValue(WatchItemDescriptor descriptor, DartVmServiceEvaluator evaluator, NodeManagerImpl manager) {
+    super(descriptor.getName());
+
+    myDescriptor = descriptor;
+    myEvaluator = evaluator;
+    myManager = manager;
+  }
+
+  @NotNull
+  public String getEvaluationExpression() {
+    return myDescriptor.getName();
+  }
+
+  @Nullable
+  public XInstanceEvaluator getInstanceEvaluator() {
+    return (callback, frame) -> myEvaluator.evaluate(getEvaluationExpression(), callback, null);
+  }
+
+  @Override
+  public void computePresentation(@NotNull XValueNode node, @NotNull XValuePlace place) {
+    myEvaluator.evaluate(getEvaluationExpression(), new XDebuggerEvaluator.XEvaluationCallback() {
+      @Override
+      public void evaluated(@NotNull XValue result) {
+        final Icon watchIcon = AllIcons.Debugger.Watch;
+
+        result.computePresentation(new XValueNode() {
+          @Override
+          public void setPresentation(@Nullable Icon icon,
+                                      @NonNls @Nullable String type,
+                                      @NonNls @NotNull String value,
+                                      boolean hasChildren) {
+            node.setPresentation(watchIcon, type, value, hasChildren);
+          }
+
+          @Override
+          public void setPresentation(@Nullable Icon icon, @NotNull XValuePresentation presentation, boolean hasChildren) {
+            node.setPresentation(watchIcon, presentation, hasChildren);
+          }
+
+          @Override
+          public void setPresentation(@Nullable Icon icon,
+                                      @NonNls @Nullable String type,
+                                      @NonNls @NotNull String separator,
+                                      @NonNls @Nullable String value,
+                                      boolean hasChildren) {
+            //noinspection deprecation
+            node.setPresentation(watchIcon, type, separator, value, hasChildren);
+          }
+
+          @Override
+          public void setFullValueEvaluator(@NotNull XFullValueEvaluator fullValueEvaluator) {
+            node.setFullValueEvaluator(fullValueEvaluator);
+          }
+
+          @Override
+          public boolean isObsolete() {
+            return node.isObsolete();
+          }
+        }, place);
+      }
+
+      @Override
+      public void errorOccurred(@NotNull String errorMessage) {
+        node.setPresentation(AllIcons.General.Error, new XErrorValuePresentation(errorMessage), false);
+      }
+    }, null);
+  }
+
+  public boolean canNavigateToSource() {
+    return false;
+  }
+
+  @Override
+  public NodeDescriptorImpl getDescriptor() {
+    return myDescriptor;
   }
 }

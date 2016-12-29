@@ -1,6 +1,7 @@
 package com.jetbrains.lang.dart.ide.runner.server.vmService;
 
 import com.google.common.base.Charsets;
+import com.intellij.debugger.ui.impl.watch.NodeManagerImpl;
 import com.intellij.execution.ExecutionResult;
 import com.intellij.execution.process.ProcessAdapter;
 import com.intellij.execution.process.ProcessEvent;
@@ -80,6 +81,8 @@ public class DartVmServiceDebugProcess extends XDebugProcess {
   @Nullable private final VirtualFile myCurrentWorkingDirectory;
   @Nullable protected String myRemoteProjectRootUri;
 
+  private final NodeManagerImpl myNodeManager;
+
   @NotNull private final OpenDartObservatoryUrlAction myOpenObservatoryAction =
     new OpenDartObservatoryUrlAction(null, () -> myVmConnected && !getSession().isStopped());
 
@@ -101,6 +104,8 @@ public class DartVmServiceDebugProcess extends XDebugProcess {
     myRemoteDebug = remoteDebug;
     myTimeout = timeout;
     myCurrentWorkingDirectory = currentWorkingDirectory;
+
+    myNodeManager = new NodeManagerImpl(session.getProject(), null);
 
     myIsolatesInfo = new IsolatesInfo();
     final DartVmServiceBreakpointHandler breakpointHandler = new DartVmServiceBreakpointHandler(this);
@@ -540,6 +545,10 @@ public class DartVmServiceDebugProcess extends XDebugProcess {
     final Pair<Integer, Integer> lineAndColumn = tokenPosToLineAndColumn.get(tokenPos);
     if (lineAndColumn == null) return XDebuggerUtil.getInstance().createPositionByOffset(file, 0);
     return XDebuggerUtil.getInstance().createPosition(file, lineAndColumn.first, lineAndColumn.second);
+  }
+
+  public NodeManagerImpl getNodeManager() {
+    return myNodeManager;
   }
 
   private static boolean isDartPatchUri(@NotNull final String uri) {
