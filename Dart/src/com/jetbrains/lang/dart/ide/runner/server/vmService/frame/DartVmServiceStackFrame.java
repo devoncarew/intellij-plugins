@@ -1,7 +1,5 @@
 package com.jetbrains.lang.dart.ide.runner.server.vmService.frame;
 
-import com.intellij.debugger.SourcePosition;
-import com.intellij.debugger.engine.JavaStackFrame;
 import com.intellij.debugger.engine.evaluation.CodeFragmentKind;
 import com.intellij.debugger.engine.evaluation.TextWithImports;
 import com.intellij.debugger.ui.impl.watch.NodeDescriptorImpl;
@@ -18,9 +16,9 @@ import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.psi.PsiCompiledElement;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiManager;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.testFramework.LightVirtualFile;
 import com.intellij.ui.ColoredTextContainer;
@@ -38,6 +36,8 @@ import com.intellij.xdebugger.settings.XDebuggerSettingsManager;
 import com.jetbrains.lang.dart.DartFileType;
 import com.jetbrains.lang.dart.DartLanguage;
 import com.jetbrains.lang.dart.ide.runner.server.vmService.DartVmServiceDebugProcess;
+import com.jetbrains.lang.dart.psi.DartFunctionBody;
+import com.jetbrains.lang.dart.psi.DartRecursiveVisitor;
 import org.dartlang.vm.service.consumer.GetObjectConsumer;
 import org.dartlang.vm.service.element.*;
 import org.jetbrains.annotations.NonNls;
@@ -46,6 +46,7 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 
 public class DartVmServiceStackFrame extends XStackFrame {
@@ -191,18 +192,24 @@ public class DartVmServiceStackFrame extends XStackFrame {
       return;
     }
 
+    //PsiTreeUtil.getParentOfType()
+    //PsiRecursiveElementWalkingVisitor
+
     // TODO: look for referenced globals from the start of the method until the current source location
 
     // TODO: look for referenced instance fields from the start of the method until the current source location
 
     // TODO: look for referenced statics from the start of the method until the current source location
 
+    final Set<String> visibleVariables = new HashSet<>();
+    final Set<String> visibleLocals = new HashSet<>();
+
     Pair<Set<String>, Set<TextWithImports>> usedVars = EMPTY_USED_VARS;
     if (mySourcePosition != null) {
       usedVars = ApplicationManager.getApplication().runReadAction(new Computable<Pair<Set<String>, Set<TextWithImports>>>() {
         @Override
         public Pair<Set<String>, Set<TextWithImports>> compute() {
-          return findReferencedVars(ContainerUtil.union(visibleVariables.keySet(), visibleLocals), mySourcePosition);
+          return findReferencedVars(ContainerUtil.union(visibleVariables, visibleLocals), mySourcePosition);
         }
       });
     }
@@ -217,12 +224,13 @@ public class DartVmServiceStackFrame extends XStackFrame {
   }
 
   @SuppressWarnings("Duplicates")
-  private static Pair<Set<String>, Set<TextWithImports>> findReferencedVars(Set<String> visibleVars, @NotNull SourcePosition position) {
+  private Pair<Set<String>, Set<TextWithImports>> findReferencedVars(Set<String> visibleVars, @NotNull XSourcePosition position) {
     final int line = position.getLine();
     if (line < 0) {
       return Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
     }
-    final PsiFile positionFile = position.getFile();
+    final VirtualFile file = position.getFile();
+    final PsiFile positionFile = PsiManager.getInstance(myDebugProcess.getSession().getProject()).findFile(file);
     if (!positionFile.isValid() || !positionFile.getLanguage().isKindOf(DartLanguage.INSTANCE)) {
       return Pair.create(visibleVars, Collections.emptySet());
     }
@@ -232,6 +240,15 @@ public class DartVmServiceStackFrame extends XStackFrame {
     if (doc == null || doc.getLineCount() == 0 || line > (doc.getLineCount() - 1)) {
       return Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
     }
+
+    PsiElement tempElement = positionFile.findElementAt(doc.getLineStartOffset(line));
+    DartFunctionBody functionBody = PsiTreeUtil.getParentOfType(tempElement, DartFunctionBody.class);
+
+    functionBody.accept(new DartRecursiveVisitor() {
+      public void visitElement(PsiElement element) {
+        super.visitElement(element);
+      }
+    });
 
     final TextRange limit = calculateLimitRange(positionFile, doc, line);
 
@@ -253,34 +270,35 @@ public class DartVmServiceStackFrame extends XStackFrame {
       final int offset = CharArrayUtil.shiftForward(doc.getCharsSequence(), doc.getLineStartOffset(line), " \t");
       PsiElement element = positionFile.findElementAt(offset);
       if (element != null) {
-        PsiMethod method = PsiTreeUtil.getNonStrictParentOfType(element, PsiMethod.class);
-        if (method != null) {
-          element = method;
-        }
-        else {
-          PsiField field = PsiTreeUtil.getNonStrictParentOfType(element, PsiField.class);
-          if (field != null) {
-            element = field;
-          }
-          else {
-            final PsiClassInitializer initializer = PsiTreeUtil.getNonStrictParentOfType(element, PsiClassInitializer.class);
-            if (initializer != null) {
-              element = initializer;
-            }
-          }
-        }
-
-        //noinspection unchecked
-        if (element instanceof PsiCompiledElement) {
-          return Pair.create(visibleVars, Collections.emptySet());
-        }
-        else {
-          JavaStackFrame.VariablesCollector collector = new JavaStackFrame.VariablesCollector(visibleVars, adjustRange(element, lineRange));
-          element.accept(collector);
-          return Pair.create(collector.getVars(), collector.getExpressions());
-        }
+        //PsiMethod method = PsiTreeUtil.getNonStrictParentOfType(element, PsiMethod.class);
+        //if (method != null) {
+        //  element = method;
+        //}
+        //else {
+        //  PsiField field = PsiTreeUtil.getNonStrictParentOfType(element, PsiField.class);
+        //  if (field != null) {
+        //    element = field;
+        //  }
+        //  else {
+        //    final PsiClassInitializer initializer = PsiTreeUtil.getNonStrictParentOfType(element, PsiClassInitializer.class);
+        //    if (initializer != null) {
+        //      element = initializer;
+        //    }
+        //  }
+        //}
+        //
+        ////noinspection unchecked
+        //if (element instanceof PsiCompiledElement) {
+        //  return Pair.create(visibleVars, Collections.emptySet());
+        //}
+        //else {
+        //  JavaStackFrame.VariablesCollector collector = new JavaStackFrame.VariablesCollector(visibleVars, adjustRange(element, lineRange));
+        //  element.accept(collector);
+        //  return Pair.create(collector.getVars(), collector.getExpressions());
+        //}
       }
     }
+
     return Pair.create(Collections.emptySet(), Collections.<TextWithImports>emptySet());
   }
 
@@ -288,7 +306,7 @@ public class DartVmServiceStackFrame extends XStackFrame {
   private static TextRange calculateLimitRange(final PsiFile file, final Document doc, final int line) {
     final int offset = doc.getLineStartOffset(line);
     if (offset > 0) {
-      PsiMethod method = PsiTreeUtil.getParentOfType(file.findElementAt(offset), PsiMethod.class, false);
+      DartFunctionBody method = PsiTreeUtil.getParentOfType(file.findElementAt(offset), DartFunctionBody.class, false);
       if (method != null) {
         final TextRange elemRange = method.getTextRange();
         return new TextRange(doc.getLineNumber(elemRange.getStartOffset()), doc.getLineNumber(elemRange.getEndOffset()));
@@ -297,7 +315,6 @@ public class DartVmServiceStackFrame extends XStackFrame {
     return new TextRange(0, doc.getLineCount() - 1);
   }
 
-  @SuppressWarnings("Duplicates")
   private static boolean shouldSkipLine(final PsiFile file, Document doc, int line) {
     final int start = doc.getLineStartOffset(line);
     final int end = doc.getLineEndOffset(line);
@@ -306,30 +323,43 @@ public class DartVmServiceStackFrame extends XStackFrame {
       return true;
     }
 
-    TextRange alreadyChecked = null;
-    for (PsiElement elem = file.findElementAt(_start); elem != null && elem.getTextOffset() <= end && (alreadyChecked == null || !alreadyChecked .contains(elem.getTextRange())); elem = elem.getNextSibling()) {
-      for (PsiElement _elem = elem; _elem.getTextOffset() >= _start; _elem = _elem.getParent()) {
-        alreadyChecked = _elem.getTextRange();
-
-        if (_elem instanceof PsiDeclarationStatement) {
-          final PsiElement[] declared = ((PsiDeclarationStatement)_elem).getDeclaredElements();
-          for (PsiElement declaredElement : declared) {
-            if (declaredElement instanceof PsiVariable) {
-              return false;
-            }
-          }
-        }
-
-        if (_elem instanceof PsiJavaCodeReferenceElement) {
-          final PsiElement resolved = ((PsiJavaCodeReferenceElement)_elem).resolve();
-          if (resolved instanceof PsiVariable) {
-            return false;
-          }
-        }
-      }
-    }
-    return true;
+    // TODO: Look for variable references.
+    return false;
   }
+
+  //@SuppressWarnings("Duplicates")
+  //private static boolean shouldSkipLine(final PsiFile file, Document doc, int line) {
+  //  final int start = doc.getLineStartOffset(line);
+  //  final int end = doc.getLineEndOffset(line);
+  //  final int _start = CharArrayUtil.shiftForward(doc.getCharsSequence(), start, " \n\t");
+  //  if (_start >= end) {
+  //    return true;
+  //  }
+  //
+  //  TextRange alreadyChecked = null;
+  //  for (PsiElement elem = file.findElementAt(_start); elem != null && elem.getTextOffset() <= end && (alreadyChecked == null || !alreadyChecked .contains(elem.getTextRange())); elem = elem.getNextSibling()) {
+  //    for (PsiElement _elem = elem; _elem.getTextOffset() >= _start; _elem = _elem.getParent()) {
+  //      alreadyChecked = _elem.getTextRange();
+  //
+  //      if (_elem instanceof PsiDeclarationStatement) {
+  //        final PsiElement[] declared = ((PsiDeclarationStatement)_elem).getDeclaredElements();
+  //        for (PsiElement declaredElement : declared) {
+  //          if (declaredElement instanceof PsiVariable) {
+  //            return false;
+  //          }
+  //        }
+  //      }
+  //
+  //      if (_elem instanceof PsiJavaCodeReferenceElement) {
+  //        final PsiElement resolved = ((PsiJavaCodeReferenceElement)_elem).resolve();
+  //        if (resolved instanceof PsiVariable) {
+  //          return false;
+  //        }
+  //      }
+  //    }
+  //  }
+  //  return true;
+  //}
 
   @Nullable
   @Override
