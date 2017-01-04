@@ -171,7 +171,7 @@ public class AttributesTest extends LightPlatformCodeInsightFixtureTestCase {
       PsiElement resolve = ref.resolve();
       assertNotNull(resolve);
       assertEquals("custom.ts", resolve.getContainingFile().getName());
-      assertEquals("Directive({\n" +
+      assertEquals("@Directive({\n" +
                    "    selector: '[my-customer]',\n" +
                    "    properties: {\n" +
                    "        'id':'dependency'\n" +
@@ -713,6 +713,14 @@ public class AttributesTest extends LightPlatformCodeInsightFixtureTestCase {
       assertNotNull(ref);
       PsiElement resolve = ref.resolve();
       assertNotNull(resolve);
+    });
+  }
+
+  public void testCaseCompletion2() throws Exception {
+    JSTestUtils.testWithinLanguageLevel(JSLanguageLevel.ES6, getProject(), (ThrowableRunnable<Exception>)() -> {
+      myFixture.configureByFiles("case.html", "angular2.js");
+      myFixture.completeBasic();
+      myFixture.checkResultByFile("case.after.html");
     });
   }
 }

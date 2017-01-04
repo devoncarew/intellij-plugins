@@ -80,6 +80,13 @@ public class AngularJSIndexingHandler extends FrameworkIndexingHandler {
   private static final BidirectionalMap<String, StubIndexKey<String, JSImplicitElementProvider>> INDEXES;
   public static final String AS_CONNECTOR_WITH_SPACES = " as ";
 
+  public static final String ANGULAR_DIRECTIVES_INDEX_USER_STRING = "adi";
+  public static final String ANGULAR_FILTER_INDEX_USER_STRING = "afi";
+
+  public static final String ANGULAR_SYMBOL_INDEX_USER_STRING = "asi";
+
+  public static final String ANGULAR_MODULE_INDEX_USER_STRING = "ami";
+
   static {
     Collections.addAll(INTERESTING_METHODS, "service", "factory", "value", "constant", "provider");
 
@@ -109,11 +116,11 @@ public class AngularJSIndexingHandler extends FrameworkIndexingHandler {
     INDEXES = new BidirectionalMap<>();
     INDEXES.put("aci", AngularControllerIndex.KEY);
     INDEXES.put("addi", AngularDirectivesDocIndex.KEY);
-    INDEXES.put("adi", AngularDirectivesIndex.KEY);
-    INDEXES.put("afi", AngularFilterIndex.KEY);
+    INDEXES.put(ANGULAR_DIRECTIVES_INDEX_USER_STRING, AngularDirectivesIndex.KEY);
+    INDEXES.put(ANGULAR_FILTER_INDEX_USER_STRING, AngularFilterIndex.KEY);
     INDEXES.put("aidi", AngularInjectionDelimiterIndex.KEY);
-    INDEXES.put("ami", AngularModuleIndex.KEY);
-    INDEXES.put("asi", AngularSymbolIndex.KEY);
+    INDEXES.put(ANGULAR_MODULE_INDEX_USER_STRING, AngularModuleIndex.KEY);
+    INDEXES.put(ANGULAR_SYMBOL_INDEX_USER_STRING, AngularSymbolIndex.KEY);
     INDEXES.put("arsi", AngularUiRouterStatesIndex.KEY);
     INDEXES.put("arsgi", AngularUiRouterGenericStatesIndex.KEY);
     INDEXES.put("agmi", AngularGenericModulesIndex.KEY);
@@ -407,7 +414,7 @@ public class AngularJSIndexingHandler extends FrameworkIndexingHandler {
     JSQualifiedNameImpl qName = JSQualifiedNameImpl.fromQualifiedName(namespace);
     JSImplicitElementImpl.Builder elementBuilder =
       new JSImplicitElementImpl.Builder(qName, argument)
-        .setType(JSImplicitElement.Type.Class).setUserString("asi");
+        .setType(JSImplicitElement.Type.Class).setUserString(ANGULAR_SYMBOL_INDEX_USER_STRING);
     final JSImplicitElementImpl implicitElement = elementBuilder.toImplicitElement();
     outData.addImplicitElement(implicitElement);
     // TODO fix

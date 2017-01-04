@@ -39,9 +39,9 @@ import org.osmorc.facet.OsmorcFacetType;
 import org.osmorc.impl.AdditionalJARContentsWatcherManager;
 
 /**
- * @author Robert F. Beeger (robert@beeger.net)
+ * @author <a href="mailto:robert@beeger.net">Robert F. Beeger</a>
  */
-class OsmorcPostStartupActivity implements StartupActivity {
+public class OsmorcPostStartupActivity implements StartupActivity {
   private static void handleFacetChange(@NotNull Facet facet, @NotNull Project project) {
     if (facet.getTypeId() != OsmorcFacetType.ID) {
       return;

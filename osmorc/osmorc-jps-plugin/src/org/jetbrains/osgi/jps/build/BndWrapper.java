@@ -27,6 +27,7 @@ package org.jetbrains.osgi.jps.build;
 import aQute.bnd.build.Project;
 import aQute.bnd.build.Workspace;
 import aQute.bnd.osgi.*;
+import aQute.service.reporter.Report;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.util.containers.ContainerUtil;
@@ -49,7 +50,7 @@ import java.util.regex.Pattern;
 /**
  * Class which wraps bnd and integrates it into IntelliJ.
  *
- * @author <a href="mailto:janthomae@janthomae.de">Jan Thom&auml;</a>
+ * @author <a href="mailto:janthomae@janthomae.de">Jan Thomä</a>
  */
 public class BndWrapper {
   private final Reporter myReporter;
@@ -78,7 +79,7 @@ public class BndWrapper {
           }
         }
         catch (OsgiBuildException e) {
-          myReporter.warning(e.getMessage(), e.getCause(), e.getSourcePath());
+          myReporter.warning(e.getMessage(), e.getCause(), e.getSourcePath(), -1);
         }
       }
       else if (CachingBundleInfoProvider.isBundle(path)) {
@@ -129,8 +130,7 @@ public class BndWrapper {
       throw new OsgiBuildException("Can't create output directory for '" + outputJar + "'");
     }
 
-    try {
-      Analyzer analyzer = new ReportingAnalyzer(myReporter);
+    try (Analyzer analyzer = new ReportingAnalyzer(myReporter)) {
       analyzer.setPedantic(false);
       analyzer.setJar(inputJar);
       analyzer.putAll(properties, false);
@@ -152,15 +152,12 @@ public class BndWrapper {
         analyzer.setProperty(Constants.EXPORT_PACKAGE, "*");
       }
 
-      JarFile jarFile = new JarFile(inputJar);
-      try {
+      String version;
+      try (JarFile jarFile = new JarFile(inputJar)) {
         analyzer.mergeManifest(jarFile.getManifest());
       }
-      finally {
-        jarFile.close();
-      }
 
-      String version = analyzer.getProperty(Constants.BUNDLE_VERSION);
+      version = analyzer.getProperty(Constants.BUNDLE_VERSION);
       if (version != null) {
         version = Analyzer.cleanupVersion(version);
         analyzer.setProperty(Constants.BUNDLE_VERSION, version);
@@ -168,10 +165,12 @@ public class BndWrapper {
 
       analyzer.calcManifest();
 
-      Jar jar = analyzer.getJar();
-      jar.write(outputJar);
-      jar.close();
-      analyzer.close();
+      try (Jar jar = analyzer.getJar()) {
+        jar.write(outputJar);
+      }
+
+      analyzer.getWarnings().forEach(s -> reportProblem(s, null, false));
+      analyzer.getErrors().forEach(s -> reportProblem(s, null, true));
     }
     catch (OsgiBuildException e) {
       throw e;
@@ -185,36 +184,36 @@ public class BndWrapper {
    * Builds the .jar file for the given module.
    */
   public void build(@NotNull Map<String, String> properties, @NotNull File[] classPath, @NotNull File[] srcPath, @NotNull File outputFile) throws Exception {
-    Builder builder = new ReportingBuilder(myReporter);
-    builder.setProperties(OrderedProperties.fromMap(properties));
-    builder.setPedantic(false);
-    builder.setClasspath(classPath);
-    builder.setSourcepath(srcPath);
-
-    doBuild(builder, outputFile);
+    try (Builder builder = new ReportingBuilder(myReporter)) {
+      builder.setProperties(OrderedProperties.fromMap(properties));
+      builder.setPedantic(false);
+      builder.setClasspath(classPath);
+      builder.setSourcepath(srcPath);
+      doBuild(builder, outputFile);
+    }
   }
 
   /**
    * Builds the .jar file for the given module.
    */
   public void build(@NotNull File bndFile, @NotNull File[] classPath, @NotNull File[] srcPath, @NotNull File outputFile) throws Exception {
-    Builder builder;
-
     Workspace workspace = Workspace.findWorkspace(bndFile);
     if (workspace != null) {
-      Project project = new Project(workspace, null, bndFile);
-      builder = new ReportingProjectBuilder(myReporter, project);
-      builder.setBase(bndFile.getParentFile());
+      try (Project project = new Project(workspace, null, bndFile);
+           Builder builder = new ReportingProjectBuilder(myReporter, project)) {
+        builder.setBase(bndFile.getParentFile());
+        doBuild(builder, outputFile);
+      }
     }
     else {
-      builder = new ReportingBuilder(myReporter);
-      builder.setProperties(bndFile);
-      builder.setPedantic(false);
-      builder.setClasspath(classPath);
-      builder.setSourcepath(srcPath);
+      try (Builder builder = new ReportingBuilder(myReporter)) {
+        builder.setProperties(bndFile);
+        builder.setPedantic(false);
+        builder.setClasspath(classPath);
+        builder.setSourcepath(srcPath);
+        doBuild(builder, outputFile);
+      }
     }
-
-    doBuild(builder, outputFile);
   }
 
   private void doBuild(@NotNull Builder builder, @NotNull File outputFile) throws Exception {
@@ -223,31 +222,45 @@ public class BndWrapper {
     if (manifest != null) {
       File manifestFile = builder.getFile(manifest);
       if (manifestFile != null) {
-        try {
-          FileInputStream stream = new FileInputStream(manifestFile);
-          try {
-            Properties p = new Properties();
-            p.load(stream);
-            String value = p.getProperty(Attributes.Name.MANIFEST_VERSION.toString());
-            if (StringUtil.isEmptyOrSpaces(value)) {
-              String message = "Manifest misses a Manifest-Version entry. This may produce an empty manifest in the resulting bundle.";
-              myReporter.warning(message, null, manifest);
-            }
-          }
-          finally {
-            stream.close();
+        try (FileInputStream stream = new FileInputStream(manifestFile)) {
+          Properties p = new Properties();
+          p.load(stream);
+          String value = p.getProperty(Attributes.Name.MANIFEST_VERSION.toString());
+          if (StringUtil.isEmptyOrSpaces(value)) {
+            String message = "Manifest misses a Manifest-Version entry. This may produce an empty manifest in the resulting bundle.";
+            myReporter.warning(message, null, manifest, -1);
           }
         }
         catch (Exception e) {
-          myReporter.warning("Can't read manifest: " + e.getMessage(), e, manifest);
+          myReporter.warning("Can't read manifest: " + e.getMessage(), e, manifest, -1);
         }
       }
     }
 
-    Jar jar = builder.build();
-    jar.setName(outputFile.getName());
-    jar.write(outputFile);
-    builder.close();
+    try (Jar jar = builder.build()) {
+      jar.setName(outputFile.getName());
+      jar.write(outputFile);
+    }
+
+    builder.getWarnings().forEach(s -> reportProblem(s, builder.getLocation(s), false));
+    builder.getErrors().forEach(s -> reportProblem(s, builder.getLocation(s), true));
+  }
+
+  private void reportProblem(String message, Report.Location location, boolean error) {
+    String sourcePath = null;
+    int lineNum = -1;
+    if (location != null) {
+      sourcePath = location.file;
+      if (location.line > 0) {
+        lineNum = location.line + 1;
+      }
+    }
+    if (error) {
+      myReporter.error(message, null, sourcePath, lineNum);
+    }
+    else {
+      myReporter.warning(message, null, sourcePath, lineNum);
+    }
   }
 
   /**
