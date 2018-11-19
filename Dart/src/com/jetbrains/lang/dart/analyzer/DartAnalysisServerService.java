@@ -1991,9 +1991,11 @@ public class DartAnalysisServerService implements Disposable {
            ", error code = " + error.getCode() + ": " + error.getMessage();
   }
 
-  private static boolean awaitForLatchCheckingCanceled(@NotNull final AnalysisServer server,
+  private static boolean awaitForLatchCheckingCanceled(@Nullable final AnalysisServer server,
                                                        @NotNull final CountDownLatch latch,
                                                        long timeoutInMillis) {
+    if (server == null) return false;
+
     if (ApplicationManager.getApplication().isUnitTestMode()) {
       timeoutInMillis *= TESTS_TIMEOUT_COEFF;
     }
